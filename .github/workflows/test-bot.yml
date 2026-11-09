@@ -1,0 +1,40 @@
+name: Test Dependency Bot
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  test-action:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install dependencies & Build action
+        run: npm ci && npm run build
+
+      - name: Run Dependency Diff Action
+        uses: ./
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          dependency-threshold: '1'
+          size-threshold: '1000'
+          duplicate-threshold: '1'
+          detect-replacements: 'true'
+          detect-license-changes: 'true'
+          detect-incompatible-engines: 'true'
+          node-version: '>=18.0.0'
+          blocked-licenses: 'GPL-3.0,AGPL-3.0'
+          step-summary: 'true'

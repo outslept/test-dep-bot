@@ -12,6 +12,8 @@ interface TarHeader {
   type: string;
 }
 
+const MAX_DECOMPRESSED_BYTES = 1024 * 1024 * 200; // 200 MB safety cap
+
 function parseTarHeader(buffer: Buffer, offset: number): TarHeader | null {
   if (offset + 512 > buffer.length) {
     return null;
@@ -23,7 +25,13 @@ function parseTarHeader(buffer: Buffer, offset: number): TarHeader | null {
     return null;
   }
 
-  const name = header.subarray(0, 100).toString('utf8').replace(/\0.*$/, '');
+  const rawName = header.subarray(0, 100).toString('utf8').replace(/\0.*$/, '');
+  const prefix = header
+    .subarray(345, 500)
+    .toString('utf8')
+    .replace(/\0.*$/, '');
+  const name = prefix ? `${prefix}/${rawName}` : rawName;
+
   const sizeStr = header
     .subarray(124, 136)
     .toString('utf8')
@@ -42,14 +50,27 @@ async function extractPackageNameFromTgz(
     const stream = createReadStream(filePath);
     const gunzip = createGunzip();
 
-    let buffer = Buffer.alloc(0);
-    let offset = 0;
+    const chunks: Buffer[] = [];
+    let totalBytes = 0;
 
     gunzip.on('data', (chunk: Buffer) => {
-      buffer = Buffer.concat([buffer, chunk]);
+      totalBytes += chunk.length;
+      if (totalBytes <= MAX_DECOMPRESSED_BYTES) {
+        chunks.push(chunk);
+      }
     });
 
     await pipeline(stream, gunzip);
+
+    if (totalBytes > MAX_DECOMPRESSED_BYTES) {
+      core.info(
+        `Skipping ${filePath}: decompressed size exceeds ${MAX_DECOMPRESSED_BYTES} bytes`
+      );
+      return null;
+    }
+
+    const buffer = Buffer.concat(chunks, totalBytes);
+    let offset = 0;
 
     while (offset < buffer.length) {
       const header = parseTarHeader(buffer, offset);
@@ -57,7 +78,9 @@ async function extractPackageNameFromTgz(
 
       offset += 512;
 
-      if (header.name === 'package/package.json' && header.type === '0') {
+      const isRegularFile =
+        header.type === '0' || header.type === '\0' || header.type === '';
+      if (header.name === 'package/package.json' && isRegularFile) {
         const contentEnd = offset + header.size;
         if (contentEnd <= buffer.length) {
           const packageJsonContent = buffer
@@ -65,7 +88,9 @@ async function extractPackageNameFromTgz(
             .toString('utf8');
           try {
             const packageJson = JSON.parse(packageJsonContent);
-            return packageJson.name ?? null;
+            return typeof packageJson.name === 'string'
+              ? packageJson.name
+              : null;
           } catch (err) {
             core.info(`Failed to parse package.json in ${filePath}: ${err}`);
             return null;
@@ -176,7 +201,9 @@ export function comparePackSizes(
 
     const sizeChange = (sourceSize ?? 0) - (baseSize ?? 0);
     const exceedsThreshold =
-      threshold === -1 ? sizeChange !== 0 : sizeChange >= threshold;
+      threshold === -1
+        ? sizeChange !== 0
+        : sizeChange > 0 && sizeChange >= threshold;
 
     packChanges.push({
       name: packName,

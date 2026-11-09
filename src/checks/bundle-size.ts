@@ -1,9 +1,5 @@
-import {formatBytes} from '../common.js';
+import {escapeMarkdownCell, formatBytes, formatBytesSigned} from '../common.js';
 import {comparePackSizes, type PackInfo} from '../packs.js';
-
-function formatBytesSigned(bytes: number): string {
-  return `${bytes > 0 ? '+' : ''}${formatBytes(bytes)}`;
-}
 
 export async function scanForBundleSize(
   messages: string[],
@@ -36,12 +32,14 @@ export async function scanForBundleSize(
           : '## ⚠️ Package Size Increase';
     const packRows = packWarnings
       .map((change) => {
-        const baseSize = change.baseSize ? formatBytes(change.baseSize) : 'New';
-        const sourceSize = change.sourceSize
-          ? formatBytes(change.sourceSize)
-          : 'Removed';
+        const baseSize =
+          change.baseSize !== null ? formatBytes(change.baseSize) : 'New';
+        const sourceSize =
+          change.sourceSize !== null
+            ? formatBytes(change.sourceSize)
+            : 'Removed';
         const sizeChange = formatBytesSigned(change.sizeChange);
-        return `| ${change.name} | ${baseSize} | ${sourceSize} | ${sizeChange} |`;
+        return `| ${escapeMarkdownCell(change.name)} | ${baseSize} | ${sourceSize} | ${sizeChange} |`;
       })
       .join('\n');
 

@@ -5,7 +5,11 @@ import {
   fetchPackageMetadata,
   isSupportedArchitecture
 } from '../npm.js';
-import {formatBytes} from '../common.js';
+import {
+  escapeMarkdownCell,
+  formatBytes,
+  formatTableWithCollapse
+} from '../common.js';
 
 interface PackageGroup {
   added: Array<{version: string; size: number | null}>;
@@ -19,7 +23,8 @@ interface DisplayEntry {
 }
 
 function buildPackageGroups(
-  packageSizes: Map<string, number | null>
+  packageSizes: Map<string, number | null>,
+  removedKeys?: Set<string>
 ): Map<string, PackageGroup> {
   const packageGroups = new Map<string, PackageGroup>();
 
@@ -29,8 +34,11 @@ function buildPackageGroups(
     const version = pkgKey.substring(atIndex + 1);
 
     const group = packageGroups.get(name) ?? {added: [], removed: []};
+    const isRemoved = removedKeys
+      ? removedKeys.has(pkgKey)
+      : size !== null && size < 0;
 
-    if (size !== null && size < 0) {
+    if (isRemoved) {
       group.removed.push({version, size});
     } else {
       group.added.push({version, size});
@@ -85,32 +93,43 @@ function createDisplayEntries(
 
 async function removeUnsupportedOptionalDependencies(
   lockFile: ParsedLockFile,
-  versionInfo: Array<{name: string; version: string; isNewPackage?: boolean}>
+  versionInfo: Array<{name: string; version: string}>
 ): Promise<void> {
-  const allOptionalVersions = new Map<string, Set<string>>();
+  if (versionInfo.length === 0) return;
+
+  const targetKeys = new Set<string>();
+  for (const v of versionInfo) {
+    targetKeys.add(`${v.name}@${v.version}`);
+  }
+
+  const candidateOptionalVersions = new Map<string, Set<string>>();
 
   for (const pkg of lockFile.packages) {
     traverse(pkg, {
       optionalDependency: (node) => {
-        const entry = allOptionalVersions.get(node.name) ?? new Set<string>();
+        if (!targetKeys.has(`${node.name}@${node.version}`)) {
+          return;
+        }
+        const entry =
+          candidateOptionalVersions.get(node.name) ?? new Set<string>();
         entry.add(node.version);
-        allOptionalVersions.set(node.name, entry);
+        candidateOptionalVersions.set(node.name, entry);
       }
     });
   }
 
-  for (const [pkg, versions] of allOptionalVersions) {
+  for (const [pkg, versions] of candidateOptionalVersions) {
     for (const version of versions) {
       const pkgMeta = await fetchPackageMetadata(pkg, version);
       if (
         pkgMeta &&
         !isSupportedArchitecture(pkgMeta, 'linux', 'x64', 'glibc')
       ) {
-        const newEntry = versionInfo.findIndex(
+        const index = versionInfo.findIndex(
           (v) => v.name === pkg && v.version === version
         );
-        if (newEntry !== -1) {
-          versionInfo.splice(newEntry, 1);
+        if (index !== -1) {
+          versionInfo.splice(index, 1);
         }
       }
     }
@@ -123,17 +142,11 @@ export async function scanForDependencySize(
   currentDeps: Map<string, Set<string>>,
   baseDeps: Map<string, Set<string>>,
   currentLockFile: ParsedLockFile,
-  baseLockFile: ParsedLockFile
-): Promise<void> {
-  const newVersions: Array<{
-    name: string;
-    version: string;
-    isNewPackage: boolean;
-  }> = [];
-  const removedVersions: Array<{
-    name: string;
-    version: string;
-  }> = [];
+  baseLockFile: ParsedLockFile,
+  diagnostics?: string[]
+): Promise<number | null> {
+  const newVersions: Array<{name: string; version: string}> = [];
+  const removedVersions: Array<{name: string; version: string}> = [];
 
   for (const [packageName, currentVersionSet] of currentDeps) {
     const baseVersionSet = baseDeps.get(packageName);
@@ -142,8 +155,7 @@ export async function scanForDependencySize(
       if (!baseVersionSet || !baseVersionSet.has(version)) {
         newVersions.push({
           name: packageName,
-          version: version,
-          isNewPackage: !baseVersionSet
+          version
         });
       }
     }
@@ -156,7 +168,7 @@ export async function scanForDependencySize(
       if (!currentVersionSet || !currentVersionSet.has(version)) {
         removedVersions.push({
           name: packageName,
-          version: version
+          version
         });
       }
     }
@@ -174,7 +186,7 @@ export async function scanForDependencySize(
   core.info(`Found ${removedVersions.length} removed package versions.`);
 
   if (newVersions.length === 0 && removedVersions.length === 0) {
-    return;
+    return 0;
   }
 
   try {
@@ -189,23 +201,46 @@ export async function scanForDependencySize(
       }`
     );
 
+    if (sizeData && sizeData.unknownPackages.length > 0 && diagnostics) {
+      diagnostics.push(
+        `Unpacked size metadata was unavailable for ${sizeData.unknownPackages.length} package(s): ${sizeData.unknownPackages.slice(0, 5).join(', ')}`
+      );
+    }
+
+    const exceedsThreshold =
+      threshold === 0
+        ? sizeData !== null && sizeData.totalSize > 0
+        : sizeData !== null && sizeData.totalSize >= threshold;
+
     const shouldShow =
       threshold === -1 ||
-      (sizeData !== null && sizeData.totalSize >= threshold);
+      exceedsThreshold ||
+      (sizeData !== null &&
+        sizeData.unknownPackages.length > 0 &&
+        threshold === 0);
 
     if (shouldShow && sizeData !== null) {
-      const packageGroups = buildPackageGroups(sizeData.packageSizes);
+      const removedKeys = new Set(
+        removedVersions.map((v) => `${v.name}@${v.version}`)
+      );
+      const packageGroups = buildPackageGroups(
+        sizeData.packageSizes,
+        removedKeys
+      );
       const displayEntries = createDisplayEntries(packageGroups);
 
-      const packageRows = displayEntries
-        .map(
-          ({label, size}) =>
-            `| ${label} | ${size === null ? '_Unknown_' : formatBytes(size)} |`
-        )
-        .join('\n');
+      const rows = displayEntries.map(
+        ({label, size}) =>
+          `| ${escapeMarkdownCell(label)} | ${size === null ? '_Unknown_' : formatBytes(size)} |`
+      );
+
+      const table = formatTableWithCollapse(
+        `| 📦 Package | 📏 Size |\n| --- | --- |`,
+        rows
+      );
 
       let alert = '';
-      if (threshold !== -1 && sizeData.totalSize >= threshold) {
+      if (threshold !== -1 && exceedsThreshold) {
         alert = `> [!WARNING]\n> This PR adds ${formatBytes(sizeData.totalSize)} of new dependencies, which exceeds the threshold of ${formatBytes(threshold)}.\n\n`;
       } else if (sizeData.totalSize < 0) {
         alert = `> [!NOTE]\n> :tada: This PR removes ${formatBytes(Math.abs(sizeData.totalSize))} of dependencies.\n\n`;
@@ -214,14 +249,15 @@ export async function scanForDependencySize(
       messages.push(
         `## 📊 Dependency Size Changes
 
-${alert}| 📦 Package | 📏 Size |
-| --- | --- |
-${packageRows}
+${alert}${table}
 
 **Total size change:** ${formatBytes(sizeData.totalSize)}`
       );
     }
+
+    return sizeData ? sizeData.totalSize : null;
   } catch (err) {
     core.info(`Failed to calculate total dependency size increase: ${err}`);
+    return null;
   }
 }

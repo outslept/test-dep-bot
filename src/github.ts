@@ -37,7 +37,8 @@ export async function findExistingComment(
 export async function upsertComment(
   octokit: Octokit,
   prNumber: number,
-  body: string
+  body: string,
+  onlyUpdateIfNoWarnings = false
 ): Promise<void> {
   const {owner, repo} = github.context.repo;
   const existingCommentId = await findExistingComment(octokit, prNumber);
@@ -50,7 +51,7 @@ export async function upsertComment(
       body
     });
     core.info(`Updated existing dependency diff comment #${existingCommentId}`);
-  } else {
+  } else if (!onlyUpdateIfNoWarnings) {
     await octokit.rest.issues.createComment({
       owner,
       repo,
@@ -58,5 +59,7 @@ export async function upsertComment(
       body
     });
     core.info('Created new dependency diff comment');
+  } else {
+    core.info('No dependency warnings found. Skipping comment creation.');
   }
 }

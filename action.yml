@@ -10,20 +10,23 @@ inputs:
   base-ref:
     description: 'Base ref to compare against (defaults to main or PR target)'
     required: false
+  head-ref:
+    description: 'Head ref to compare (defaults to PR head SHA or current commit)'
+    required: false
   github-token:
     description: 'The GitHub token for authentication.'
-    required: true
+    required: false
     default: ${{ github.token }}
   pr-number:
     description: 'The number of the pull request to comment on.'
-    required: true
+    required: false
     default: ${{ github.event.pull_request.number }}
   dependency-threshold:
     description: 'Threshold for warning about significant increase in number of dependencies'
     required: false
     default: '10'
   size-threshold:
-    description: 'Threshold (in bytes) for warning about significant increase in package size'
+    description: 'Threshold (in bytes) for warning about significant increase in package size. Set to -1 to always report size changes.'
     required: false
     default: '100000'
   base-packages:
@@ -43,12 +46,65 @@ inputs:
   detect-replacements:
     description: 'Detect modules which have community suggested alternatives'
     required: false
-    default: true
+    default: 'true'
+  transitive-replacements:
+    description: 'Also detect replacements for newly introduced transitive dependencies in the lockfile'
+    required: false
+    default: 'false'
+  exclude-dev:
+    description: 'Exclude devDependencies and their exclusive dependency trees from all checks'
+    required: false
+    default: 'false'
+  exclude-dependencies:
+    description: 'Comma-separated list of package names or glob patterns (e.g., "eslint,@types/*") to exclude along with their dependency trees'
+    required: false
+    default: ''
+  detect-license-changes:
+    description: 'Detect license changes when upgrading dependencies'
+    required: false
+    default: 'true'
+  blocked-licenses:
+    description: 'Comma-separated list of disallowed SPDX license identifiers (e.g., "GPL-3.0,AGPL-3.0,UNLICENSED")'
+    required: false
+    default: ''
+  detect-incompatible-engines:
+    description: 'Detect new or updated dependencies whose engines.node is incompatible with the project'
+    required: false
+    default: 'true'
+  node-version:
+    description: 'Explicit Node.js semver range to validate engines.node against (falls back to package.json#engines.node)'
+    required: false
+    default: ''
+  detect-registry-changes:
+    description: 'Detect registry URL differences or packages resolved from disallowed registries'
+    required: false
+    default: 'true'
+  allowed-registries:
+    description: 'Comma-separated list of allowed registry origins'
+    required: false
+    default: 'https://registry.npmjs.org,https://registry.yarnpkg.com'
+  blocked-maintainers:
+    description: 'Comma-separated list of npm usernames to flag when found in package maintainers or publishers'
+    required: false
+    default: ''
+  checks:
+    description: 'Comma-separated list of checks to run (count,size,duplicates,provenance,replacements,pack-size,license,engines,registry,maintainers)'
+    required: false
+    default: 'count,size,duplicates,provenance,replacements,pack-size,license,engines,registry,maintainers'
+  fail-on:
+    description: 'Comma-separated list of checks that should fail the action when triggered ("none", "all", or check names)'
+    required: false
+    default: 'none'
+  step-summary:
+    description: 'Write the generated Markdown report to GITHUB_STEP_SUMMARY'
+    required: false
+    default: 'true'
   working-directory:
     description: 'Working directory to scan for package lock file'
     required: false
+    default: '.'
   mode:
-    description: 'Run mode. "comment" posts a PR comment directly, "artifact" writes a JSON file containing the comment body and PR number, "comment-from-artifact" reads a previously written artifact file and posts it as a PR comment.'
+    description: 'Run mode: "comment" posts a PR comment, "artifact" writes a JSON artifact, "comment-from-artifact" posts a comment from an artifact, "report" only generates outputs/summary without GitHub API calls.'
     required: false
     default: 'comment'
   artifact-path:
@@ -57,7 +113,21 @@ inputs:
 
 outputs:
   artifact-path:
-    description: 'Path to the artifact JSON file. Set when mode is "artifact".'
+    description: 'Path to the artifact JSON file. Set when mode is "artifact" or when artifact-path is provided in "report" mode.'
+  outcome:
+    description: 'Analysis outcome: "clean", "warnings", "partial", or "skipped".'
+  triggered-checks:
+    description: 'Comma-separated list of checks that produced warnings.'
+  warnings-count:
+    description: 'Number of checks that produced warnings.'
+  dependency-count-change:
+    description: 'Net change in the number of dependency versions.'
+  dependency-size-change:
+    description: 'Net change in unpacked dependency size in bytes.'
+  comment-body:
+    description: 'The rendered Markdown report.'
+  json:
+    description: 'Serialized JSON report containing summary metrics, warnings, and suggested next commands.'
 
 runs:
   using: node24

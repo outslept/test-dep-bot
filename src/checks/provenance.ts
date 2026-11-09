@@ -1,5 +1,10 @@
 import * as core from '@actions/core';
-import {getMinTrustLevel, getProvenanceForPackageVersions} from '../npm.js';
+import {
+  getMinTrustLevel,
+  getProvenanceForPackageVersions,
+  prefetchPackageMetadata
+} from '../npm.js';
+import {escapeMarkdownCell} from '../common.js';
 
 export async function scanForProvenance(
   messages: string[],
@@ -7,6 +12,25 @@ export async function scanForProvenance(
   baseDeps: Map<string, Set<string>>
 ): Promise<void> {
   const provenanceRows: string[] = [];
+  const toPrefetch: Array<{name: string; version: string}> = [];
+
+  for (const [packageName, currentVersionSet] of currentDeps) {
+    const baseVersionSet = baseDeps.get(packageName);
+    if (
+      !baseVersionSet ||
+      baseVersionSet.size === 0 ||
+      currentVersionSet.isSubsetOf(baseVersionSet)
+    ) {
+      continue;
+    }
+    for (const v of baseVersionSet)
+      toPrefetch.push({name: packageName, version: v});
+    for (const v of currentVersionSet) {
+      toPrefetch.push({name: packageName, version: v});
+    }
+  }
+
+  await prefetchPackageMetadata(toPrefetch);
 
   for (const [packageName, currentVersionSet] of currentDeps) {
     const baseVersionSet = baseDeps.get(packageName);
@@ -38,7 +62,7 @@ export async function scanForProvenance(
 
       if (minCurrentTrust.level < minBaseTrust.level) {
         provenanceRows.push(
-          `| ${packageName} | ${minBaseTrust.status} | ${minCurrentTrust.status} |`
+          `| ${escapeMarkdownCell(packageName)} | ${escapeMarkdownCell(minBaseTrust.status)} | ${escapeMarkdownCell(minCurrentTrust.status)} |`
         );
       }
     } catch (err) {
