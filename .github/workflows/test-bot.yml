@@ -34,7 +34,10 @@ jobs:
           duplicate-threshold: '1'
           detect-replacements: 'true'
           detect-license-changes: 'true'
-          detect-incompatible-engines: 'true'
-          node-version: '>=18.0.0'
-          blocked-licenses: 'GPL-3.0,AGPL-3.0'
+
+          blocked-licenses: 'MIT,GPL-3.0'
+          blocked-maintainers: 'jonschlinkert'
+          exclude-dependencies: 'moment'
+          fail-on: 'license,maintainers'
+
           step-summary: 'true'
